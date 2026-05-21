@@ -20,117 +20,132 @@ jobs:
           - runner: ubuntu-22.04-arm
             os: linux
             arch: aarch64
-    runs-on: ${{ matrix.runner }}
-    env:
-      NAME: "cargo-bazel-${{ matrix.os }}-${{ matrix.arch }}"
-    steps:
-      - uses: actions/checkout@v4
+          - runner: windows-2022
+            os: windows
+            arch: x86_64
+          - runner: windows-11-arm
+            os: windows
+            arch: aarch64
+          - runner: macos-13
+            os: darwin
+            arch: x86_64
+          - runner: macos-14
+            os: darwin
+            arch: aarch64
+      runs-on: ${{ matrix.runner }}
+      env:
+        NAME: "cargo-bazel-${{ matrix.os }}-${{ matrix.arch }}"
+      steps:
+        - uses: actions/checkout@v4
 
-      - name: Install rust toolchains for host
-        run: |
-          version="$(grep 'DEFAULT_RUST_VERSION =' ./rust/private/common.bzl | grep -o '[[:digit:].]\+')"
-          rustup install "${version}"
-          rustup override set "${version}"
+        - name: Install zstd
+          if: ${{ runner.os == 'Windows' }}
+          uses: MinoruSekine/setup-scoop@v4.0.2
+          with:
+            buckets: main
+            apps: zstd
 
-      - name: Build cargo-bazel
-        run: cargo build -r -p cargo-bazel
-        working-directory: ./crate_universe
+        - name: Install rust toolchains for host
+          run: |
+            version="$(grep 'DEFAULT_RUST_VERSION =' ./rust/private/common.bzl | grep -o '[[:digit:].]\+')"
+            rustup install "${version}"
+            rustup override set "${version}"
 
-      - name: Generate archive with BUILD
+        - name: Build cargo-bazel
+          run: cargo build -r -p cargo-bazel
+          working-directory: ./crate_universe
+
+        - name: Generate archive with BUILD
+          run: |
+            mkdir -p artifacts-archive
+            BIN_NAME="cargo-bazel${{ runner.os == 'Windows' && '.exe' || '' }}"
+            
+            mkdir -p "${NAME}"
+            cp "./crate_universe/target/release/$BIN_NAME" "${NAME}/"
+            
+            cat > "${NAME}/BUILD" <<EOF
+            exports_files(["${BIN_NAME}"])
+            
+            load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+            
+            sh_binary(
+                name = "bin",
+                srcs = ["${BIN_NAME}"],
+                visibility = ["//visibility:public"],
+            )
+            
+            EOF
+            
+            tar -cf - "${NAME}" | zstd --ultra -22 -o "artifacts-archive/$NAME.tar.zst"
+
+        - name: Upload artifact
+          uses: actions/upload-artifact@v4
+          with:
+            name: ${{ env.NAME }}
+            path: artifacts-archive/${{ env.NAME }}.tar.zst
+
+      release:
+        needs: builds
+        runs-on: ubuntu-22.04
+        permissions:
+          contents: write
         env:
-          ARTIFACT_NAME: ${{ env.NAME }}
-        run: |
-          mkdir -p artifacts-archive
-          BIN_NAME="cargo-bazel"
+          TAG_NAME: commit-${{ github.sha }}
+        steps:
+          - name: Download artifacts
+            uses: actions/download-artifact@v4
+            with:
+              path: ./artifacts
 
-          mkdir -p "$ARTIFACT_NAME"
-          cp "./crate_universe/target/release/$BIN_NAME" "$ARTIFACT_NAME/"
+          - name: Generate release body
+            run: |
+              set -euo pipefail
 
-          cat > "$ARTIFACT_NAME/BUILD" <<EOF
-          exports_files(["${BIN_NAME}"])
+              shopt -s globstar  # enable recursive globbing
 
-          load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+              echo '```bazel' > release_body.txt
+              cat >> release_body.txt <<EOF
+              bazel_dep(name = "rules_rust")
 
-          sh_binary(
-              name = "bin",
-              srcs = ["${BIN_NAME}"],
-              visibility = ["//visibility:public"],
-          )
+              git_override(
+                  module_name = "rules_rust",
+                  commit = "${{ github.sha }}",
+                  remote = "https://github.com/${{ github.repository }}.git",
+              )
 
-          EOF
+              http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-          tar -cf - "$ARTIFACT_NAME" | zstd --ultra -22 -o "artifacts-archive/$ARTIFACT_NAME.tar.zst"
+              cargo_bazel_url = "https://github.com/${{ github.repository }}/releases/download/${{ env.TAG_NAME }}/"
+              EOF
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.NAME }}
-          path: artifacts-archive/${{ env.NAME }}.tar.zst
+              echo '' >> release_body.txt
 
-  release:
-    needs: builds
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    env:
-      COMMIT_SHA: ${{ github.sha }}
-      REPO_NAME: ${{ github.repository }}
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
+              for archive in ./artifacts/**/*.tar.zst; do
+                FILE_NAME=$(basename "$archive")
+                SHA=$(sha256sum "$archive" | awk '{print $1}')
+                NAME="${FILE_NAME%.tar.zst}"
 
-      - name: Generate release body
-        run: |
-          set -euo pipefail
-          shopt -s globstar
+                cat >> release_body.txt <<EOF
+              http_archive(
+                  name = "$NAME",
+                  sha256 = "$SHA",
+                  strip_prefix = "$NAME",
+                  url = cargo_bazel_url + "$FILE_NAME",
+              )
+              EOF
 
-          TAG_NAME="commit-${COMMIT_SHA}"
+                echo '' >> release_body.txt
+              done
 
-          echo '```bazel' > release_body.txt
-          cat >> release_body.txt <<EOF
-          bazel_dep(name = "rules_rust")
+              echo '```' >> release_body.txt
+              cat release_body.txt
 
-          git_override(
-              module_name = "rules_rust",
-              commit = "${COMMIT_SHA}",
-              remote = "https://github.com/${REPO_NAME}.git",
-          )
-
-          http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-          cargo_bazel_url = "https://github.com/${REPO_NAME}/releases/download/${TAG_NAME}/"
-          EOF
-
-          echo '' >> release_body.txt
-
-          for archive in ./artifacts/**/*.tar.zst; do
-            FILE_NAME=$(basename "$archive")
-            SHA=$(sha256sum "$archive" | awk '{print $1}')
-            NAME="${FILE_NAME%.tar.zst}"
-
-            cat >> release_body.txt <<EOF
-          http_archive(
-              name = "$NAME",
-              sha256 = "$SHA",
-              strip_prefix = "$NAME",
-              url = cargo_bazel_url + "$FILE_NAME",
-          )
-          EOF
-
-            echo '' >> release_body.txt
-          done
-
-          echo '```' >> release_body.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: "commit-${{ github.sha }}"
-        with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: "cargo-bazel build for ${{ env.COMMIT_SHA }}"
-          body_path: release_body.txt
-          files: ./artifacts/**/*.tar.zst
+          - name: Create GitHub Release
+            uses: softprops/action-gh-release@v2
+            with:
+              tag_name: ${{ env.TAG_NAME }}
+              name: "cargo-bazel build for ${{ github.sha }}"
+              body_path: release_body.txt
+              files: ./artifacts/**/*.tar.zst
+            env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
