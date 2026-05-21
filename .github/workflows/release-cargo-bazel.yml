@@ -26,9 +26,6 @@ jobs:
           - runner: windows-11-arm
             os: windows
             arch: aarch64
-          - runner: macos-13
-            os: darwin
-            arch: x86_64
           - runner: macos-14
             os: darwin
             arch: aarch64
