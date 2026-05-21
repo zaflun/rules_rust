@@ -299,7 +299,7 @@ def _rlocationpath(file, workspace_name):
 
     return "{}/{}".format(workspace_name, file.short_path)
 
-def _create_runfiles_dir(ctx, script, retain_list):
+def _create_runfiles_dir(ctx, script, script_target, retain_list):
     """Create a runfiles directory to represent `CARGO_MANIFEST_DIR`.
 
     Due to the inability to forcibly generate runfiles directories for use as inputs
@@ -312,7 +312,8 @@ def _create_runfiles_dir(ctx, script, retain_list):
 
     Args:
         ctx (ctx): The rule's context object
-        script (Target): The `cargo_build_script.script` target.
+        script (Target): The `cargo_build_script.script` executable target.
+        script_target (Target): The `cargo_build_script.script` attribute target (for data files).
         retain_list (list): A list of strings to keep in generated runfiles directories.
 
     Returns:
@@ -331,13 +332,26 @@ def _create_runfiles_dir(ctx, script, retain_list):
 
     runfiles = script[DefaultInfo].default_runfiles
 
+    # Also include data/compile_data files from the crate's build script
+    # configuration.  Without this, files like V8's pre-generated `gen/*.rs`
+    # bindings end up in the regular runfiles (`_bs-.runfiles/`) but NOT in
+    # `_bs.cargo_runfiles/`, causing `include!(env!("..."))` to fail when
+    # the compile action references them via the cargo_runfiles path.
+    extra_data_files = []
+    if CargoBuildScriptRunfilesInfo in script_target:
+        for target in script_target[CargoBuildScriptRunfilesInfo].data:
+            extra_data_files.append(target[DefaultInfo].files)
+
     args = ctx.actions.args()
     args.use_param_file("--cargo_manifest_args=@%s", use_always = True)
     args.add(runfiles_dir.path)
     args.add(",".join(retain_list))
     args.add_all(runfiles.files, map_each = _runfiles_map, allow_closure = True)
+    for depset in extra_data_files:
+        args.add_all(depset, map_each = _runfiles_map, allow_closure = True)
 
-    return runfiles_dir, runfiles.files, args
+    all_inputs = depset(transitive = [runfiles.files] + extra_data_files)
+    return runfiles_dir, all_inputs, args
 
 def _cargo_build_script_impl(ctx):
     """The implementation for the `cargo_build_script` rule.
@@ -381,6 +395,7 @@ def _cargo_build_script_impl(ctx):
     runfiles_dir, runfiles_inputs, runfiles_args = _create_runfiles_dir(
         ctx = ctx,
         script = ctx.attr.script,
+        script_target = ctx.attr.script,
         retain_list = ctx.attr._cargo_manifest_dir_filename_suffixes_to_retain[BuildSettingInfo].value,
     )
     manifest_dir = "{}/{}/{}".format(runfiles_dir.path, workspace_name, ctx.label.package)

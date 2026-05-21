@@ -239,6 +239,16 @@ fn run_buildrs() -> Result<(), String> {
         .drain_runfiles_dir(&out_dir_abs)
         .unwrap();
 
+    // Rewrite absolute sandbox paths in generated files under OUT_DIR.
+    // Build scripts see OUT_DIR as an absolute path (e.g.
+    // /sandbox/6028/execroot/_main/bazel-out/.../._bs.out_dir) and may embed
+    // it in generated source files (e.g. RustEmbed's `#[folder = "..."]`).
+    // When the downstream Rustc action runs in a *different* sandbox, those
+    // absolute paths are stale.  We replace the exec_root prefix with the
+    // relative `out_dir` path so the generated files use stable, execroot-
+    // relative paths that resolve correctly in any sandbox.
+    redact_out_dir_files(&out_dir_abs, &exec_root.to_string_lossy());
+
     // Remove non-deterministic configure-generated files from OUT_DIR before
     // Bazel captures it as a TreeArtifact. Files like config.log and
     // Makefile.config embed the Bazel sandbox path (which changes on every
@@ -301,6 +311,37 @@ fn remove_nondeterministic_out_dir_files_with_list(dir: &Path, volatile_basename
                     || name.ends_with(".pc")
                 {
                     let _ = remove_file(&path);
+                }
+            }
+        }
+    }
+}
+
+/// Recursively walk `dir` and replace occurrences of the absolute
+/// `exec_root` path in text files with the empty string, turning
+/// sandbox-absolute paths into execroot-relative paths.  This makes
+/// generated source files (e.g. `embed.rs` from utoipa-swagger-ui,
+/// binding includes from rusty_v8) portable across sandbox instances.
+///
+/// Only processes files that look like text (valid UTF-8 and
+/// containing the exec_root string).  Binary files are left untouched.
+fn redact_out_dir_files(dir: &Path, exec_root: &str) {
+    let entries = match read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_dir() {
+            redact_out_dir_files(&path, exec_root);
+        } else if file_type.is_file() {
+            if let Ok(content) = read_to_string(&path) {
+                if content.contains(exec_root) {
+                    let redacted = content.replace(exec_root, "");
+                    let _ = write(&path, redacted);
                 }
             }
         }
