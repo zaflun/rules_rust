@@ -244,30 +244,16 @@ fn run_buildrs() -> Result<(), String> {
     // /sandbox/6028/execroot/_main/bazel-out/.../._bs.out_dir) and may embed
     // it in generated source files (e.g. RustEmbed's `#[folder = "..."]`).
     // When the downstream Rustc action runs in a *different* sandbox, those
-    // absolute paths are stale.  We replace the exec_root prefix with the
-    // relative `out_dir` path so the generated files use stable, execroot-
-    // relative paths that resolve correctly in any sandbox.
-    // Replace absolute exec_root paths with paths relative to the crate's
-    // CARGO_MANIFEST_DIR (which is at external/<crate>/ under the exec_root).
-    // RustEmbed and similar proc macros resolve #[folder] relative to
-    // CARGO_MANIFEST_DIR, so the replacement must navigate up to the
-    // exec_root first (../../) before descending into bazel-out/...
-    // Compute a relative path prefix from manifest_dir back to exec_root.
-    // manifest_dir is exec_root.join(manifest_dir_env), so we need as many
-    // "../" as there are path components in manifest_dir_env (which may be
-    // absolute if Bazel provides it that way — strip exec_root first).
-    let manifest_rel = if manifest_dir_env.starts_with('/') {
-        manifest_dir
-            .strip_prefix(&exec_root)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
-    } else {
-        manifest_dir_env.clone()
-    };
-    let depth = manifest_rel.split('/').filter(|s| !s.is_empty()).count();
-    let up_prefix = "../".repeat(depth);
-    let exec_root_str = format!("{}/", exec_root.to_string_lossy());
-    redact_out_dir_files(&out_dir_abs, &exec_root_str, &up_prefix);
+    // absolute paths are stale.
+    //
+    // Since generated files reference paths within OUT_DIR itself (e.g.
+    // RustEmbed `#[folder = "/sandbox/.../._bs.out_dir/swagger-ui/dist/"]`),
+    // replace the absolute OUT_DIR prefix with the env var reference
+    // `$OUT_DIR/` so proc macros with env-var interpolation (e.g.
+    // rust-embed's `interpolate-folder-path` feature) resolve it at
+    // compile time via the stable `OUT_DIR` env var.
+    let out_dir_str = format!("{}/", out_dir_abs.to_string_lossy());
+    redact_out_dir_files(&out_dir_abs, &out_dir_str, "$OUT_DIR/");
 
     // Remove non-deterministic configure-generated files from OUT_DIR before
     // Bazel captures it as a TreeArtifact. Files like config.log and
