@@ -252,7 +252,19 @@ fn run_buildrs() -> Result<(), String> {
     // RustEmbed and similar proc macros resolve #[folder] relative to
     // CARGO_MANIFEST_DIR, so the replacement must navigate up to the
     // exec_root first (../../) before descending into bazel-out/...
-    let depth = manifest_dir_env.split('/').filter(|s| !s.is_empty()).count();
+    // Compute a relative path prefix from manifest_dir back to exec_root.
+    // manifest_dir is exec_root.join(manifest_dir_env), so we need as many
+    // "../" as there are path components in manifest_dir_env (which may be
+    // absolute if Bazel provides it that way — strip exec_root first).
+    let manifest_rel = if manifest_dir_env.starts_with('/') {
+        manifest_dir
+            .strip_prefix(&exec_root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+    } else {
+        manifest_dir_env.clone()
+    };
+    let depth = manifest_rel.split('/').filter(|s| !s.is_empty()).count();
     let up_prefix = "../".repeat(depth);
     let exec_root_str = format!("{}/", exec_root.to_string_lossy());
     redact_out_dir_files(&out_dir_abs, &exec_root_str, &up_prefix);
