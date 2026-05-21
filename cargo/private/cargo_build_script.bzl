@@ -347,10 +347,14 @@ def _create_runfiles_dir(ctx, script, script_target, retain_list):
     args.add(runfiles_dir.path)
     args.add(",".join(retain_list))
     args.add_all(runfiles.files, map_each = _runfiles_map, allow_closure = True)
-    for depset in extra_data_files:
-        args.add_all(depset, map_each = _runfiles_map, allow_closure = True)
+    for extra_depset in extra_data_files:
+        args.add_all(extra_depset, map_each = _runfiles_map, allow_closure = True)
 
-    all_inputs = depset(transitive = [runfiles.files] + extra_data_files)
+    if extra_data_files:
+        # buildifier: disable=uninitialized
+        all_inputs = depset([], transitive = [runfiles.files] + extra_data_files)
+    else:
+        all_inputs = runfiles.files
     return runfiles_dir, all_inputs, args
 
 def _cargo_build_script_impl(ctx):
