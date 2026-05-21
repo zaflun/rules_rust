@@ -247,8 +247,15 @@ fn run_buildrs() -> Result<(), String> {
     // absolute paths are stale.  We replace the exec_root prefix with the
     // relative `out_dir` path so the generated files use stable, execroot-
     // relative paths that resolve correctly in any sandbox.
-    let exec_root_with_slash = format!("{}/", exec_root.to_string_lossy());
-    redact_out_dir_files(&out_dir_abs, &exec_root_with_slash);
+    // Replace absolute exec_root paths with paths relative to the crate's
+    // CARGO_MANIFEST_DIR (which is at external/<crate>/ under the exec_root).
+    // RustEmbed and similar proc macros resolve #[folder] relative to
+    // CARGO_MANIFEST_DIR, so the replacement must navigate up to the
+    // exec_root first (../../) before descending into bazel-out/...
+    let depth = manifest_dir_env.split('/').filter(|s| !s.is_empty()).count();
+    let up_prefix = "../".repeat(depth);
+    let exec_root_str = format!("{}/", exec_root.to_string_lossy());
+    redact_out_dir_files(&out_dir_abs, &exec_root_str, &up_prefix);
 
     // Remove non-deterministic configure-generated files from OUT_DIR before
     // Bazel captures it as a TreeArtifact. Files like config.log and
@@ -326,7 +333,7 @@ fn remove_nondeterministic_out_dir_files_with_list(dir: &Path, volatile_basename
 ///
 /// Only processes files that look like text (valid UTF-8 and
 /// containing the exec_root string).  Binary files are left untouched.
-fn redact_out_dir_files(dir: &Path, exec_root: &str) {
+fn redact_out_dir_files(dir: &Path, exec_root: &str, replacement: &str) {
     let entries = match read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -337,11 +344,11 @@ fn redact_out_dir_files(dir: &Path, exec_root: &str) {
         };
         let path = entry.path();
         if file_type.is_dir() {
-            redact_out_dir_files(&path, exec_root);
+            redact_out_dir_files(&path, exec_root, replacement);
         } else if file_type.is_file() {
             if let Ok(content) = read_to_string(&path) {
                 if content.contains(exec_root) {
-                    let redacted = content.replace(exec_root, "");
+                    let redacted = content.replace(exec_root, replacement);
                     let _ = write(&path, redacted);
                 }
             }
