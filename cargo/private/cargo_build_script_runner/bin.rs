@@ -33,7 +33,7 @@ fn run_buildrs() -> Result<(), String> {
     let exec_root = env::current_dir().expect("Failed to get current directory");
     let manifest_dir_env = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR was not set");
     let rustc_env = env::var("RUSTC").expect("RUSTC was not set");
-    let manifest_dir = exec_root.join(manifest_dir_env);
+    let manifest_dir = exec_root.join(&manifest_dir_env);
     let rustc = exec_root.join(&rustc_env);
     let Args {
         progname,
