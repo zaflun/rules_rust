@@ -92,7 +92,7 @@ fn run_buildrs() -> Result<(), String> {
         .current_dir(&working_directory)
         .envs(target_env_vars)
         .env("OUT_DIR", &out_dir_abs)
-        .env("CARGO_MANIFEST_DIR", manifest_dir)
+        .env("CARGO_MANIFEST_DIR", &manifest_dir)
         .env("RUSTC", rustc)
         .env("RUST_BACKTRACE", "full");
 
