@@ -247,7 +247,8 @@ fn run_buildrs() -> Result<(), String> {
     // absolute paths are stale.  We replace the exec_root prefix with the
     // relative `out_dir` path so the generated files use stable, execroot-
     // relative paths that resolve correctly in any sandbox.
-    redact_out_dir_files(&out_dir_abs, &exec_root.to_string_lossy());
+    let exec_root_with_slash = format!("{}/", exec_root.to_string_lossy());
+    redact_out_dir_files(&out_dir_abs, &exec_root_with_slash);
 
     // Remove non-deterministic configure-generated files from OUT_DIR before
     // Bazel captures it as a TreeArtifact. Files like config.log and
